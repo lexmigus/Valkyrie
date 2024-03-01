@@ -33,6 +33,15 @@ date = (datetime.today() - timedelta(days=7)).strftime("%Y-%m-%d")
 JSON = os.path.join(os.getcwd(), "json")
 STROKES = os.path.join(os.getcwd(), "strokes")
 USERS = dr.get_number_users()
+BIKE_DISTANCE_FACTOR = 2
+TENTHS_PER_SECOND = 10
+SECONDS_PER_MINUTE = 60
+TENTHS_PER_MINUTE = 600
+DATE_CONSTANT = 10
+LAYOUT = [
+    [sg.Text("Ranking workouts...")],
+    [sg.ProgressBar(USERS, orientation="h", size=(20, 20), key="progress")],
+]
 BANNERS = {
     "peak_power": ["Name", "PB", "Date", "Watts", "Split", "SPM"],
     "1min": ["Name", "PB", "Date", "Distance", "Split", "Watts", "SPM"],
@@ -151,10 +160,6 @@ BANNERS = {
         "Split 3",
     ],
 }
-BIKE_DISTANCE_FACTOR = 2
-SECONDS_PER_MINUTE = 60
-TENTHS_PER_MINUTE = 600
-DATE_CONSTANT = 10
 
 
 def output_to_xlsx(ranking: list, name: str, banner: list) -> None:
@@ -215,7 +220,9 @@ def find_approx(
     Returns:
         float: The approximate time for the target distance.
     """
-    percentage = (target_distance * 10 - distance1) / (distance2 - distance1)
+    percentage = (target_distance * TENTHS_PER_SECOND - distance1) / (
+        distance2 - distance1
+    )
     approx_time = time1 + (time2 - time1) * percentage
     return approx_time
 
@@ -241,7 +248,7 @@ def get_intervals(workout_id: str, split_length: int, num_splits: int) -> list:
         accumulated_time = 0
         for num, stroke in enumerate(data["data"]):
             stroke = data["data"][num]
-            if stroke["d"] == target * 10:
+            if stroke["d"] == target * TENTHS_PER_SECOND:
                 splits.append(
                     cv.calculate_split(stroke["t"] - accumulated_time, split_length)
                 )
@@ -250,7 +257,7 @@ def get_intervals(workout_id: str, split_length: int, num_splits: int) -> list:
                     return splits, accumulated_time
                 target += split_length
 
-            elif stroke["d"] > target * 10:
+            elif stroke["d"] > target * TENTHS_PER_SECOND:
                 previous = data["data"][num - 1]
                 split_time = find_approx(
                     previous["d"],
@@ -302,7 +309,7 @@ def get_times(workout_id: str, split_length: int, num_splits: int) -> list:
                     return splits, accumulated_dist
                 target += split_length
 
-            elif stroke["d"] > target * 10:
+            elif stroke["d"] > target * TENTHS_PER_SECOND:
                 previous = data["data"][num - 1]
                 split_dist = find_approx(
                     previous["t"],
@@ -346,7 +353,7 @@ def process_workout(
     info = [
         cv.format_name(dr.get_name(workout["user_id"])),
         "bike" if workout["type"] == "bike" else "",
-        workout["date"][:10],
+        workout["date"][:DATE_CONSTANT],
         (
             workout["distance"]
             if category == "time"
@@ -376,51 +383,49 @@ def find_peak_power(api_token: str) -> None:
         None
     """
     ranking = []
-    layout = [
-        [sg.Text("Ranking workouts...")],
-        [sg.ProgressBar(USERS, orientation="h", size=(20, 20), key="progress")],
-    ]
     window = sg.Window(
-        "Progress Bar", layout, finalize=True, icon="resources/VarsityV.ico"
+        "Progress Bar", LAYOUT, finalize=True, icon="resources/VarsityV.ico"
     )
 
     for i, filename in enumerate(os.listdir(JSON)):
-        try:
-            file_path = os.path.join(JSON, filename)
-            with open(file_path, "r", encoding="utf-8") as f:
-                data = load(f)
-            if "data" in data:
-                maximum, spm = float("inf"), 0
-                for result in data["data"]:
-                    if result["distance"] <= 100:
-                        dl.get_stroke_data(result["user_id"], result["id"], api_token)
-                        path = os.path.join(STROKES, str(result["id"]) + ".json")
-                        with open(path, "r", encoding="utf-8") as f:
-                            piece = load(f)
-                        for stroke in piece["data"]:
-                            if stroke["p"] < maximum:
-                                maximum, spm = stroke["p"], stroke["spm"]
+        file_path = os.path.join(JSON, filename)
+        with open(file_path, "r", encoding="utf-8") as f:
+            data = load(f)
 
-                        if maximum not in [float("inf"), 0]:
-                            ranking.append(
-                                [
-                                    cv.format_name(dr.get_name(result["user_id"])),
-                                    "",
-                                    result["date"][:10],
-                                    cv.split_to_watts(cv.time_to_real(maximum)),
-                                    cv.time_to_real(maximum),
-                                    spm,
-                                ]
-                            )
-                            window["progress"].update(i + 1)
-        except KeyError as e:
-            logging.error(e)
-            window["progress"].update(i + 1)
+        if "data" not in data:
+            continue
+
+        maximum, spm = float("inf"), 0
+        for result in data["data"]:
+            if result["distance"] <= 200:
+                dl.get_stroke_data(result["user_id"], result["id"], api_token)
+                path = os.path.join(STROKES, str(result["id"]) + ".json")
+
+                with open(path, "r", encoding="utf-8") as f:
+                    piece = load(f)
+
+                for stroke in piece["data"]:
+                    if stroke["p"] < maximum:
+                        maximum, spm = stroke["p"], stroke["spm"]
+
+                if maximum not in [float("inf"), 0]:
+                    ranking.append(
+                        [
+                            cv.format_name(dr.get_name(result["user_id"])),
+                            "",
+                            result["date"][:DATE_CONSTANT],
+                            cv.split_to_watts(cv.time_to_real(maximum)),
+                            cv.time_to_real(maximum),
+                            spm,
+                        ]
+                    )
+                    window["progress"].update(i + 1)
+
     ranking.sort(key=lambda x: x[2], reverse=True)
 
     output_to_xlsx(
         ranking,
-        (f'results/{str(datetime.today().strftime("%Y-%m-%d"))}_peak_power.xlsx'),
+        f'results/{str(datetime.today().strftime("%Y-%m-%d"))}_peak_power.xlsx',
         BANNERS["peak_power"],
     )
     window.close()
@@ -437,12 +442,8 @@ def find_1min(bikes: bool) -> None:
         None
     """
     ranking = []
-    layout = [
-        [sg.Text("Ranking workouts...")],
-        [sg.ProgressBar(USERS, orientation="h", size=(20, 20), key="progress")],
-    ]
     window = sg.Window(
-        "Progress Bar", layout, finalize=True, icon="resources/VarsityV.ico"
+        "Progress Bar", LAYOUT, finalize=True, icon="resources/VarsityV.ico"
     )
 
     for i, filename in enumerate(os.listdir(JSON)):
@@ -450,27 +451,24 @@ def find_1min(bikes: bool) -> None:
 
         with open(file_path, "r", encoding="utf-8") as f:
             data = load(f)
+        if not "data" in data:
+            continue
 
-        try:
-            if "data" in data:
-                for result in data["data"]:
-                    if (
-                        result["workout_type"] == "FixedTimeSplit"
-                        and result["time"] == 600
-                        and (result["type"] == "rower" if not bikes else True)
-                    ):
-                        ranking += process_workout(result, "time")
+        for result in data["data"]:
+            if (
+                result["workout_type"] == "FixedTimeSplit"
+                and result["time"] == 600
+                and (result["type"] == "rower" if not bikes else True)
+            ):
+                ranking += process_workout(result, "time")
 
-                        window["progress"].update(i + 1)
-        except KeyError as e:
-            logging.error(e)
-            window["progress"].update(i + 1)
+                window["progress"].update(i + 1)
 
     ranking.sort(key=lambda x: (x[1] != "bike", x[3]))
 
     output_to_xlsx(
         ranking,
-        (f'results/{str(datetime.today().strftime("%Y-%m-%d"))}_1min.xlsx'),
+        f'results/{str(datetime.today().strftime("%Y-%m-%d"))}_1min.xlsx',
         BANNERS["1min"],
     )
     window.close()
@@ -495,56 +493,47 @@ def rank_single_distance(
     logging.info("Ranking %s workout", workout_name)
     distance = split_length * num_intervals
     ranking = []
-    layout = [
-        [sg.Text("Ranking workouts...")],
-        [sg.ProgressBar(USERS, orientation="h", size=(20, 20), key="progress")],
-    ]
     window = sg.Window(
-        "Progress Bar", layout, finalize=True, icon="resources/VarsityV.ico"
+        "Progress Bar", LAYOUT, finalize=True, icon="resources/VarsityV.ico"
     )
 
     for i, filename in enumerate(os.listdir(JSON)):
-        try:
-            file_path = os.path.join(JSON, filename)
-            with open(file_path, "r", encoding="utf-8") as f:
-                data = load(f)
-            for result in data["data"]:
-                dist = (
-                    result["distance"]
-                    if result["type"] == "rower"
-                    else result["distance"] / BIKE_DISTANCE_FACTOR
+        file_path = os.path.join(JSON, filename)
+        with open(file_path, "r", encoding="utf-8") as f:
+            data = load(f)
+        for result in data["data"]:
+            dist = (
+                result["distance"]
+                if result["type"] == "rower"
+                else result["distance"] / BIKE_DISTANCE_FACTOR
+            )
+            if (
+                result["workout_type"] == "FixedDistanceSplits"
+                and dist == distance
+                and (result["type"] == "rower" if not bikes else True)
+            ):
+
+                rank = process_workout(result, "distance")
+
+                dl.get_stroke_data(result["user_id"], result["id"], api_token)
+                splits, accumulated = get_intervals(
+                    result["id"], split_length, num_intervals - 1
                 )
-                if (
-                    result["workout_type"] == "FixedDistanceSplits"
-                    and dist == distance
-                    and result["type"] == "rower"
-                    and (result["type"] == "rower" if not bikes else True)
-                ):
+                splits.append(
+                    cv.calculate_split(result["time"] - accumulated, split_length)
+                )
 
-                    rank = process_workout(result, "distance")
+                rank += splits
+                ranking.append(rank)
+                window["progress"].update(i + 1)
 
-                    dl.get_stroke_data(result["user_id"], result["id"], api_token)
-                    splits, accumulated = get_intervals(
-                        result["id"], split_length, num_intervals - 1
-                    )
-                    splits.append(
-                        cv.calculate_split(result["time"] - accumulated, split_length)
-                    )
-
-                    rank += splits
-                    ranking.append(rank)
-                    window["progress"].update(i + 1)
-
-        except KeyError as e:
-            logging.error(e)
-            window["progress"].update(i + 1)
     window.close()
 
     ranking.sort(key=lambda x: (x[1] != "bike", x[3]))
 
     output_to_xlsx(
         ranking,
-        (f"results/{str(datetime.today().strftime('%Y-%m-%d'))}_{workout_name}.xlsx"),
+        f"results/{str(datetime.today().strftime('%Y-%m-%d'))}_{workout_name}.xlsx",
         BANNERS[workout_name],
     )
     window.close()
@@ -559,51 +548,41 @@ def rank_single_time(
 ) -> None:
     """Rank the workouts for a single time interval and save the results"""
     ranking = []
-    layout = [
-        [sg.Text("Ranking workouts...")],
-        [sg.ProgressBar(USERS, orientation="h", size=(20, 20), key="progress")],
-    ]
+
     window = sg.Window(
-        "Progress Bar", layout, finalize=True, icon="resources/VarsityV.ico"
+        "Progress Bar", LAYOUT, finalize=True, icon="resources/VarsityV.ico"
     )
 
     for i, filename in enumerate(os.listdir(JSON)):
-        try:
-            file_path = os.path.join(JSON, filename)
+        file_path = os.path.join(JSON, filename)
 
-            with open(file_path, "r", encoding="utf-8") as f:
-                data = load(f)
-            if "data" in data:
-                for result in data["data"]:
-                    if (
-                        result["workout_type"] == "FixedTimeSplits"
-                        and result["time"] == time
-                    ):
-                        rank = process_workout(result, "time")
+        with open(file_path, "r", encoding="utf-8") as f:
+            data = load(f)
+        if "data" not in data:
+            continue
 
-                        dl.get_stroke_data(result["user_id"], result["id"], api_token)
-                        splits, accumulated = get_times(
-                            result["id"], split_length, num_intervals - 1
-                        )
-                        splits.append(
-                            cv.calculate_split(
-                                split_length, result["distance"] - accumulated
-                            )
-                        )
-                        rank += splits
-                        ranking.append(rank)
-                        window["progress"].update(i + 1)
+        for result in data["data"]:
+            if result["workout_type"] == "FixedTimeSplits" and result["time"] == time:
+                rank = process_workout(result, "time")
 
-        except KeyError as e:
-            logging.error(e)
-            window["progress"].update(i + 1)
+                dl.get_stroke_data(result["user_id"], result["id"], api_token)
+                splits, accumulated = get_times(
+                    result["id"], split_length, num_intervals - 1
+                )
+                splits.append(
+                    cv.calculate_split(split_length, result["distance"] - accumulated)
+                )
+                rank += splits
+                ranking.append(rank)
+                window["progress"].update(i + 1)
+
     window.close()
 
     ranking.sort(key=lambda x: (x[1] != "bike", x[3]))
 
     output_to_xlsx(
         ranking,
-        (f"results/{str(datetime.today().strftime('%Y-%m-%d'))}_{workout_name}.xlsx"),
+        f"results/{str(datetime.today().strftime('%Y-%m-%d'))}_{workout_name}.xlsx",
         BANNERS[workout_name],
     )
     window.close()
@@ -623,12 +602,8 @@ def rank_intervals_distance(
 
     Returns: None"""
     ranking = []
-    layout = [
-        [sg.Text("Ranking workouts...")],
-        [sg.ProgressBar(USERS, orientation="h", size=(20, 20), key="progress")],
-    ]
     window = sg.Window(
-        "Progress Bar", layout, finalize=True, icon="resources/VarsityV.ico"
+        "Progress Bar", LAYOUT, finalize=True, icon="resources/VarsityV.ico"
     )
 
     for i, filename in enumerate(os.listdir(JSON)):
@@ -636,49 +611,47 @@ def rank_intervals_distance(
         with open(file_path, "r", encoding="utf-8") as f:
             data = load(f)
 
-        try:
-            if "data" in data:
-                for result in data["data"]:
-                    if (
-                        (
-                            (
-                                result["workout_type"] == "FixedTimeInterval"
-                                or result["workout_type"] == "VariableInterval"
-                            )
-                            and result["distance"] == dist
-                        )
-                        or (
-                            bikes
-                            and result["workout_type"] == "FixedTimeInterval"
-                            or bikes
-                            and result["workout_type"] == "VariableInterval"
-                        )
-                        and result["distance"] == dist * 2
-                    ):
-                        rank = process_workout(result, "distance", is_interval=True)
+        if "data" not in data:
+            continue
 
-                        for interval in range(num_intervals):
-                            time = result["workout"]["intervals"][interval]["time"]
-                            if result["type"] == "bike":
-                                time /= BIKE_DISTANCE_FACTOR
-                            rank.append(
-                                cv.calculate_split(
-                                    result["workout"]["intervals"][interval]["time"],
-                                    interval_length,
-                                )
-                            )
-                        ranking.append(rank)
-                        window["progress"].update(i + 1)
+        for result in data["data"]:
+            if (
+                (
+                    (
+                        result["workout_type"] == "FixedTimeInterval"
+                        or result["workout_type"] == "VariableInterval"
+                    )
+                    and result["distance"] == dist
+                )
+                or (
+                    bikes
+                    and (
+                        result["workout_type"] == "FixedTimeInterval"
+                        or result["workout_type"] == "VariableInterval"
+                    )
+                )
+                and result["distance"] == dist * BIKE_DISTANCE_FACTOR
+            ):
+                rank = process_workout(result, "distance", is_interval=True)
 
-        except KeyError as e:
-            logging.error(e)
-            window["progress"].update(i + 1)
+                for interval in range(num_intervals):
+                    time = result["workout"]["intervals"][interval]["time"]
+                    if result["type"] == "bike":
+                        time /= BIKE_DISTANCE_FACTOR
+                    rank.append(
+                        cv.calculate_split(
+                            result["workout"]["intervals"][interval]["time"],
+                            interval_length,
+                        )
+                    )
+                ranking.append(rank)
+                window["progress"].update(i + 1)
 
     ranking.sort(key=lambda x: (x[1] != "bike", x[3]))
 
     output_to_xlsx(
         ranking,
-        (f'results/{str(datetime.today().strftime("%Y-%m-%d"))}_{workout_name}.xlsx'),
+        f'results/{str(datetime.today().strftime("%Y-%m-%d"))}_{workout_name}.xlsx',
         BANNERS[workout_name],
     )
     window.close()
@@ -698,12 +671,8 @@ def rank_intervals_time(
     Returns: None"""
     time = interval_length * num_intervals
     ranking = []
-    layout = [
-        [sg.Text("Ranking workouts...")],
-        [sg.ProgressBar(USERS, orientation="h", size=(20, 20), key="progress")],
-    ]
     window = sg.Window(
-        "Progress Bar", layout, finalize=True, icon="resources/VarsityV.ico"
+        "Progress Bar", LAYOUT, finalize=True, icon="resources/VarsityV.ico"
     )
 
     for i, filename in enumerate(os.listdir(JSON)):
@@ -711,43 +680,40 @@ def rank_intervals_time(
 
         with open(file_path, "r", encoding="utf-8") as f:
             data = load(f)
-        try:
-            if "data" in data:
-                for result in data["data"]:
-                    if (
-                        (
-                            result["workout_type"] == "FixedTimeInterval"
-                            or result["workout_type"] == "VariableInterval"
+        if not "data" in data:
+            continue
+
+        for result in data["data"]:
+            if (
+                (
+                    result["workout_type"] == "FixedTimeInterval"
+                    or result["workout_type"] == "VariableInterval"
+                )
+                and result["time"] == time
+                and (result["type"] == "rower" if not bikes else True)
+            ):
+
+                rank = process_workout(result, "time", is_interval=True)
+
+                for interval in range(num_intervals):
+                    dist = result["workout"]["intervals"][interval]["distance"]
+                    if result["type"] == "bike":
+                        dist /= BIKE_DISTANCE_FACTOR
+                    rank.append(
+                        cv.calculate_split(
+                            interval_length,
+                            dist,
                         )
-                        and result["time"] == time
-                        and (result["type"] == "rower" if not bikes else True)
-                    ):
+                    )
 
-                        rank = process_workout(result, "time", is_interval=True)
-
-                        for interval in range(num_intervals):
-                            dist = result["workout"]["intervals"][interval]["distance"]
-                            if result["type"] == "bike":
-                                dist /= BIKE_DISTANCE_FACTOR
-                            rank.append(
-                                cv.calculate_split(
-                                    interval_length,
-                                    dist,
-                                )
-                            )
-
-                        ranking.append(rank)
-                        window["progress"].update(i + 1)
-
-        except KeyError as e:
-            logging.error(e)
-            window["progress"].update(i + 1)
+                ranking.append(rank)
+                window["progress"].update(i + 1)
 
     ranking.sort(key=lambda x: (x[1] != "bike", x[3]))
 
     output_to_xlsx(
         ranking,
-        (f'results/{str(datetime.today().strftime("%Y-%m-%d"))}_{workout_name}.xlsx'),
+        f'results/{str(datetime.today().strftime("%Y-%m-%d"))}_{workout_name}.xlsx',
         BANNERS[workout_name],
     )
     window.close()
